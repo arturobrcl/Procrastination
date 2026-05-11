@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Procrastination Roulette",
+    "slug": "procrastination-roulette",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "sdkVersion": "54.0.0",
+    "platforms": ["android"],
+    "android": {
+      "package": "com.procrastinationroulette"
+    }
+  }
+}
