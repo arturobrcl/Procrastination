@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY package*.json ./
 RUN npm install --legacy-peer-deps
-RUN npx expo install expo-status-bar expo-asset react react-native
+RUN npx expo install expo-status-bar expo-asset react react-native @react-native-async-storage/async-storage
 
 COPY . .
 

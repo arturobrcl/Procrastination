@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Text,
@@ -20,6 +21,19 @@ export default function App() {
   const [isSpinning, setIsSpinning] = useState(false);
 
   const scaleAnim = useRef(new Animated.Value(1)).current;
+  const isLoaded = useRef(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem('activities').then(stored => {
+      if (stored) setActivities(JSON.parse(stored));
+      isLoaded.current = true;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded.current) return;
+    AsyncStorage.setItem('activities', JSON.stringify(activities));
+  }, [activities]);
 
   const addActivity = () => {
     const trimmed = inputText.trim();
