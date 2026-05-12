@@ -57,7 +57,7 @@ export default function App() {
       setResult(activities[Math.floor(Math.random() * activities.length)]);
       count++;
       if (count < maxCount) {
-        setTimeout(tick, 60 + (count / maxCount) * 220);
+        setTimeout(tick, 80);
       } else {
         setIsSpinning(false);
         scaleAnim.setValue(0.7);
