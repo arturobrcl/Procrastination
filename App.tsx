@@ -8,21 +8,36 @@ import {
   FlatList,
   StyleSheet,
   Animated,
-  SafeAreaView,
   KeyboardAvoidingView,
   Platform,
+  Modal,
+  Pressable,
+  Dimensions,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
+type Group = {
+  id: string;
+  name: string;
+  activities: string[];
+};
+
+const DRAWER_WIDTH = Dimensions.get('window').width * 0.75;
+
 export default function App() {
-  const [activities, setActivities] = useState<string[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
+  const [newGroupName, setNewGroupName] = useState('');
   const [result, setResult] = useState<string | null>(null);
   const [isSpinning, setIsSpinning] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   const scaleAnim = useRef(new Animated.Value(1)).current;
+  const drawerAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const spinTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -31,45 +46,128 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    AsyncStorage.getItem('activities')
-      .then(stored => {
-        if (!stored) return;
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.every(i => typeof i === 'string')) {
-          setActivities(parsed);
+    const load = async () => {
+      try {
+        // Migrate old flat activities format into a default group
+        const oldStored = await AsyncStorage.getItem('activities');
+        if (oldStored) {
+          const parsed = JSON.parse(oldStored);
+          if (Array.isArray(parsed) && parsed.every((i: unknown) => typeof i === 'string')) {
+            const migrated: Group = {
+              id: Date.now().toString(),
+              name: 'My List',
+              activities: parsed as string[],
+            };
+            const newGroups = [migrated];
+            await AsyncStorage.setItem('groups', JSON.stringify(newGroups));
+            await AsyncStorage.removeItem('activities');
+            setGroups(newGroups);
+            setActiveGroupId(migrated.id);
+            return;
+          }
         }
-      })
-      .catch(() => {})
-      .finally(() => {
+
+        const stored = await AsyncStorage.getItem('groups');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            setGroups(parsed);
+            if (parsed.length > 0) setActiveGroupId(parsed[0].id);
+          }
+        }
+      } catch {
+        // Storage unavailable, start fresh
+      } finally {
         setIsLoaded(true);
-      });
+      }
+    };
+    load();
   }, []);
 
   useEffect(() => {
     if (!isLoaded) return;
-    AsyncStorage.setItem('activities', JSON.stringify(activities)).catch(() => {});
-  }, [activities, isLoaded]);
+    AsyncStorage.setItem('groups', JSON.stringify(groups)).catch(() => {});
+  }, [groups, isLoaded]);
+
+  const activeGroup = groups.find(g => g.id === activeGroupId) ?? null;
+
+  const openDrawer = () => {
+    drawerAnim.setValue(-DRAWER_WIDTH);
+    setDrawerOpen(true);
+    Animated.timing(drawerAnim, {
+      toValue: 0,
+      duration: 250,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const closeDrawer = () => {
+    Animated.timing(drawerAnim, {
+      toValue: -DRAWER_WIDTH,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => setDrawerOpen(false));
+  };
+
+  const selectGroup = (id: string) => {
+    setActiveGroupId(id);
+    setResult(null);
+    closeDrawer();
+  };
+
+  const createGroup = () => {
+    const name = newGroupName.trim();
+    if (!name) return;
+    const newGroup: Group = { id: Date.now().toString(), name, activities: [] };
+    setGroups(prev => [...prev, newGroup]);
+    setActiveGroupId(newGroup.id);
+    setNewGroupName('');
+    setResult(null);
+    closeDrawer();
+  };
+
+  const deleteGroup = (id: string) => {
+    setGroups(prev => {
+      const updated = prev.filter(g => g.id !== id);
+      if (activeGroupId === id) {
+        setActiveGroupId(updated.length > 0 ? updated[0].id : null);
+        setResult(null);
+      }
+      return updated;
+    });
+  };
 
   const addActivity = () => {
     const trimmed = inputText.trim();
-    if (!trimmed || activities.includes(trimmed)) return;
-    setActivities(prev => [...prev, trimmed]);
+    if (!trimmed || !activeGroup || activeGroup.activities.includes(trimmed)) return;
+    setGroups(prev =>
+      prev.map(g =>
+        g.id === activeGroupId ? { ...g, activities: [...g.activities, trimmed] } : g
+      )
+    );
     setInputText('');
   };
 
   const removeActivity = (item: string) => {
-    setActivities(prev => prev.filter(a => a !== item));
+    setGroups(prev =>
+      prev.map(g =>
+        g.id === activeGroupId
+          ? { ...g, activities: g.activities.filter(a => a !== item) }
+          : g
+      )
+    );
   };
 
   const spin = () => {
-    if (activities.length === 0 || isSpinning) return;
+    if (!activeGroup || activeGroup.activities.length === 0 || isSpinning) return;
+    const snapshot = activeGroup.activities;
 
     setIsSpinning(true);
     let count = 0;
     const maxCount = 20;
 
     const tick = () => {
-      setResult(activities[Math.floor(Math.random() * activities.length)]);
+      setResult(snapshot[Math.floor(Math.random() * snapshot.length)]);
       count++;
       if (count < maxCount) {
         spinTimeoutRef.current = setTimeout(tick, 80);
@@ -88,74 +186,99 @@ export default function App() {
     tick();
   };
 
+  const activities = activeGroup?.activities ?? [];
+  const canSpin = activities.length > 0 && !isSpinning;
+
   return (
+    <SafeAreaProvider>
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
 
-      <Text style={styles.title}>Roulette</Text>
-      <Text style={styles.subtitle}>Stop overthinking, start doing</Text>
-
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.inputSection}
-      >
-        <View style={styles.inputRow}>
-          <TextInput
-            style={styles.input}
-            value={inputText}
-            onChangeText={setInputText}
-            onSubmitEditing={addActivity}
-            placeholder="Add an activity..."
-            placeholderTextColor="#475569"
-            returnKeyType="done"
-          />
-          <TouchableOpacity style={styles.addButton} onPress={addActivity}>
-            <Text style={styles.addButtonText}>+</Text>
-          </TouchableOpacity>
-        </View>
-      </KeyboardAvoidingView>
-
-      <FlatList
-        data={activities}
-        keyExtractor={(item) => item}
-        renderItem={({ item }) => (
-          <View style={styles.activityItem}>
-            <Text style={styles.activityText}>{item}</Text>
-            <TouchableOpacity
-              onPress={() => removeActivity(item)}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <Text style={styles.removeText}>x</Text>
-            </TouchableOpacity>
+      <View style={styles.header}>
+        <TouchableOpacity
+          onPress={openDrawer}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <View style={styles.burgerIcon}>
+            <View style={styles.burgerLine} />
+            <View style={styles.burgerLine} />
+            <View style={styles.burgerLine} />
           </View>
-        )}
-        style={styles.list}
-        ListEmptyComponent={
-          <Text style={styles.emptyText}>Add some activities above to get started</Text>
-        }
-      />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {activeGroup ? activeGroup.name : 'Roulette'}
+        </Text>
+        <View style={{ width: 32 }} />
+      </View>
+
+      <Text style={styles.subtitle}>Stop overthinking, let chance decide</Text>
+
+      {activeGroup ? (
+        <>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.inputSection}
+          >
+            <View style={styles.inputRow}>
+              <TextInput
+                style={styles.input}
+                value={inputText}
+                onChangeText={setInputText}
+                onSubmitEditing={addActivity}
+                placeholder="Add an option..."
+                placeholderTextColor="#475569"
+                returnKeyType="done"
+              />
+              <TouchableOpacity style={styles.addButton} onPress={addActivity}>
+                <Text style={styles.addButtonText}>+</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+
+          <FlatList
+            data={activities}
+            keyExtractor={(item) => item}
+            renderItem={({ item }) => (
+              <View style={styles.activityItem}>
+                <Text style={styles.activityText}>{item}</Text>
+                <TouchableOpacity
+                  onPress={() => removeActivity(item)}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                >
+                  <Text style={styles.removeText}>x</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            style={styles.list}
+            ListEmptyComponent={
+              <Text style={styles.emptyText}>Add some options above to get started</Text>
+            }
+          />
+        </>
+      ) : (
+        <View style={styles.noGroupContainer}>
+          <Text style={styles.emptyText}>Open the menu to create your first list</Text>
+        </View>
+      )}
 
       <View style={styles.rouletteSection}>
         {result ? (
           <Animated.View style={[styles.resultCard, { transform: [{ scale: scaleAnim }] }]}>
             <Text style={styles.resultLabel}>
-              {isSpinning ? 'Choosing...' : 'Go do this:'}
+              {isSpinning ? 'Choosing...' : 'Your pick:'}
             </Text>
             <Text style={styles.resultText}>{result}</Text>
           </Animated.View>
         ) : (
           <View style={styles.resultPlaceholder}>
-            <Text style={styles.placeholderText}>Your activity will appear here</Text>
+            <Text style={styles.placeholderText}>Your pick will appear here</Text>
           </View>
         )}
 
         <TouchableOpacity
-          style={[
-            styles.spinButton,
-            (activities.length === 0 || isSpinning) && styles.spinButtonDisabled,
-          ]}
+          style={[styles.spinButton, !canSpin && styles.spinButtonDisabled]}
           onPress={spin}
-          disabled={activities.length === 0 || isSpinning}
+          disabled={!canSpin}
           activeOpacity={0.8}
         >
           <Text style={styles.spinButtonText}>
@@ -163,7 +286,70 @@ export default function App() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={drawerOpen}
+        transparent
+        animationType="none"
+        onRequestClose={closeDrawer}
+      >
+        <View style={styles.drawerOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeDrawer} />
+          <Animated.View style={[styles.drawer, { transform: [{ translateX: drawerAnim }] }]}>
+            <SafeAreaView style={{ flex: 1 }}>
+              <Text style={styles.drawerTitle}>My Lists</Text>
+              <FlatList
+                data={groups}
+                keyExtractor={(g) => g.id}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={[
+                      styles.drawerItem,
+                      item.id === activeGroupId && styles.drawerItemActive,
+                    ]}
+                    onPress={() => selectGroup(item.id)}
+                  >
+                    <Text
+                      style={[
+                        styles.drawerItemText,
+                        item.id === activeGroupId && styles.drawerItemTextActive,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {item.name}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => deleteGroup(item.id)}
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                    >
+                      <Text style={styles.drawerDeleteText}>x</Text>
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                )}
+                ListEmptyComponent={
+                  <Text style={styles.drawerEmptyText}>No lists yet</Text>
+                }
+              />
+              <View style={styles.drawerInputRow}>
+                <TextInput
+                  style={styles.drawerInput}
+                  value={newGroupName}
+                  onChangeText={setNewGroupName}
+                  onSubmitEditing={createGroup}
+                  placeholder="New list name..."
+                  placeholderTextColor="#475569"
+                  returnKeyType="done"
+                />
+                <TouchableOpacity style={styles.addButton} onPress={createGroup}>
+                  <Text style={styles.addButtonText}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </SafeAreaView>
+          </Animated.View>
+        </View>
+      </Modal>
     </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
@@ -173,12 +359,30 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f172a',
     paddingHorizontal: 20,
   },
-  title: {
-    fontSize: 34,
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    marginBottom: 4,
+  },
+  burgerIcon: {
+    width: 32,
+    gap: 5,
+    paddingVertical: 4,
+  },
+  burgerLine: {
+    height: 2,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 2,
+  },
+  headerTitle: {
+    flex: 1,
+    fontSize: 22,
     fontWeight: 'bold',
     color: '#f1f5f9',
-    marginTop: 20,
     textAlign: 'center',
+    marginHorizontal: 8,
   },
   subtitle: {
     fontSize: 13,
@@ -186,6 +390,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 24,
     letterSpacing: 0.5,
+  },
+  noGroupContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   inputSection: {
     marginBottom: 12,
@@ -310,5 +519,79 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     letterSpacing: 3,
+  },
+  drawerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  drawer: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: DRAWER_WIDTH,
+    backgroundColor: '#0f172a',
+    borderRightWidth: 1,
+    borderRightColor: '#1e293b',
+    paddingHorizontal: 20,
+  },
+  drawerTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#f1f5f9',
+    marginTop: 20,
+    marginBottom: 16,
+  },
+  drawerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 6,
+  },
+  drawerItemActive: {
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#6366f1',
+  },
+  drawerItemText: {
+    flex: 1,
+    color: '#94a3b8',
+    fontSize: 16,
+  },
+  drawerItemTextActive: {
+    color: '#f1f5f9',
+    fontWeight: '600',
+  },
+  drawerDeleteText: {
+    color: '#475569',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  drawerEmptyText: {
+    color: '#334155',
+    textAlign: 'center',
+    marginTop: 20,
+    fontSize: 14,
+  },
+  drawerInputRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingBottom: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#1e293b',
+  },
+  drawerInput: {
+    flex: 1,
+    backgroundColor: '#1e293b',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    color: '#f1f5f9',
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: '#334155',
   },
 });
