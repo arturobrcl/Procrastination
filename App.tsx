@@ -21,19 +21,34 @@ export default function App() {
   const [isSpinning, setIsSpinning] = useState(false);
 
   const scaleAnim = useRef(new Animated.Value(1)).current;
-  const isLoaded = useRef(false);
+  const spinTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.getItem('activities').then(stored => {
-      if (stored) setActivities(JSON.parse(stored));
-      isLoaded.current = true;
-    });
+    return () => {
+      if (spinTimeoutRef.current) clearTimeout(spinTimeoutRef.current);
+    };
   }, []);
 
   useEffect(() => {
-    if (!isLoaded.current) return;
-    AsyncStorage.setItem('activities', JSON.stringify(activities));
-  }, [activities]);
+    AsyncStorage.getItem('activities')
+      .then(stored => {
+        if (!stored) return;
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.every(i => typeof i === 'string')) {
+          setActivities(parsed);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        setIsLoaded(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+    AsyncStorage.setItem('activities', JSON.stringify(activities)).catch(() => {});
+  }, [activities, isLoaded]);
 
   const addActivity = () => {
     const trimmed = inputText.trim();
@@ -42,8 +57,8 @@ export default function App() {
     setInputText('');
   };
 
-  const removeActivity = (index: number) => {
-    setActivities(prev => prev.filter((_, i) => i !== index));
+  const removeActivity = (item: string) => {
+    setActivities(prev => prev.filter(a => a !== item));
   };
 
   const spin = () => {
@@ -57,7 +72,7 @@ export default function App() {
       setResult(activities[Math.floor(Math.random() * activities.length)]);
       count++;
       if (count < maxCount) {
-        setTimeout(tick, 80);
+        spinTimeoutRef.current = setTimeout(tick, 80);
       } else {
         setIsSpinning(false);
         scaleAnim.setValue(0.7);
@@ -102,12 +117,12 @@ export default function App() {
 
       <FlatList
         data={activities}
-        keyExtractor={(_, index) => index.toString()}
-        renderItem={({ item, index }) => (
+        keyExtractor={(item) => item}
+        renderItem={({ item }) => (
           <View style={styles.activityItem}>
             <Text style={styles.activityText}>{item}</Text>
             <TouchableOpacity
-              onPress={() => removeActivity(index)}
+              onPress={() => removeActivity(item)}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
               <Text style={styles.removeText}>x</Text>
